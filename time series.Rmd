@@ -1,0 +1,355 @@
+---
+title: "Modeling S&P Composite using GARCH model"
+author: "Haining Zhang &  Qinqing Liu"
+date: "4/6/2017"
+output: html_document
+---
+
+##1.Introduction
+The volatility of this S&P 500 stock index returns can be seen as a measurement of the risk for investment and provides essential information for the investors to make the correct decisions.
+The S&P Composite data set is collected by Yale Department of Economics (https://www.quandl.com/data/YALE/SPCOMP-S-P- Composite). 
+
+This data set consists of monthly stock price, dividends, and earnings data and the consumer price index (to allow conversion to real values), etc, all starting January 1871. We delete NA values in first 10 years and get the data over the period Jan, 1881 through Dec, 2016. Time series plot for all 9 variables shows as follows.
+In this dataset, CPI is the Consumer Price Index; Dividend is a distribution of a portion of a company’s earnings; Earnings is an after-tax net income of the company; Long interest Rates refer to government bonds maturing in ten years; Real Price are adjusted for general price level changes over time; Cyclically Adjusted PE. Ratio is defined as price divided by the average of ten years of earnings, adjusted for inflation.
+
+```{r,echo=FALSE,include=FALSE}
+
+library(fGarch)
+library(car)
+library(astsa)
+library(tseries)
+library(corrplot)
+raw<-read.csv('./YALE-SPCOMP.csv')
+#Pre-process the data
+data<-raw[-c(1:11),]
+
+attach(data)
+which(is.na(S.P.Composite))
+which(is.na(Dividend))
+which(is.na(Earnings))
+which(is.na(CPI))
+which(is.na(Long.Interest.Rate))
+which(is.na(Real.Dividend))
+which(is.na(Real.Price))
+which(is.na(Real.Earnings))
+which(is.na(Cyclically.Adjusted.PE.Ratio))
+detach(data)
+
+#delete rows with na ratio:1871-1880
+data2<-data[-c(1633:1752),-c(1)]
+data2<- data2[seq(dim(data2)[1],1),]
+```
+
+The dataset shows as follows:
+
+
+```{r,echo =FALSE}
+#descripte data
+dta<-ts(data2,start=c(1881, 1), end=c(2016, 12), frequency=12)
+ts.plot(dta,gpars= list(col=rainbow(10)),main='time series plot for S&P Composite data')
+legend('topleft', col=rainbow(10), lty=1, lwd=2, bty=c('n'),
+         legend=c("S.P.Composite", "Dividend",'Earnings',
+                           'CPI','Long.Interest.Rate','Real.Price',
+                           'Real.Dividend','Real.Earnings','Cyclically.Adjusted.PE.Ratio'),cex=0.7) 
+```
+
+##2. Goal of Analysis
+
+In order to follow the bond market, it is important to learn about the S&P Composite index of stocks because the volatility of this S&P Composite stock index returns can be seen as a measurement of the risk for investment and provides essential information for the investors to make the correct decisions.
+
+The S&P Composite measures the value of stocks of the 500 largest corporations by market capitalization listed on the New York Stock Exchange or Nasdaq Composite. Standard & Poor's intention is to have a price that provides a quick look at the stock market and economy. Also, the S&P Composite is considered as an effective representation for the economy due to its inclusion of 500 companies, which covers all areas of the United States and across all industries. Through financial time series analysis, we can access, visualize and analyze historic time-series data.
+
+In this case, we used the GARCH-M model including ARMA, GARCH model and linear regression with several extraneous predictors as following, which can be used to forecast the S&P Composite Stock Index Returns in the following years.
+
+
+$$
+\left\{
+\begin{aligned}
+X_t&=\beta'z_t+y_t^*     \hspace{4cm}  (1)\\
+\phi(B)y_t^*&=\theta(B)y_t \hspace{4.38cm} (2)\\
+y_{t}&=\sigma_t\varepsilon_t  \hspace{4.83cm}(3)\\
+\sigma_t^2&=\alpha_0+\sum_{j=1}^m\alpha_j y_{t-j}^2+\sum_{j=1}^s\beta_j \sigma_{t-j}^2 \hspace{1cm}(4)\\
+\end{aligned}
+\right.
+$$
+
+where $\beta'z_t$ is a function of exogenous predictors.
+
+
+## 3. Comprehensive Data Analysis.
+### (1) Linear Regression.
+
+Firstly, we fit a full linear regression model with Dividend, Earnings, Real Dividend, Real Earnings, CPI (Consumer Price Index), Long Interest Rate, Real Price and Cyclically Adjusted PE Ratio and obtain regression residuals.
+
+
+```{r  echo=FALSE}
+#do regression
+fit_reg1<-lm(S.P.Composite~.,data=data2)
+summary(fit_reg1)
+```
+
+We also draw correlation plot for all variables and find most variables have significant high positive correlations (>0.8) with S&P Composite. So use these variables to fit a regression model is reasonable.
+
+```{r,echo=FALSE}
+#corellation matrix
+
+corrplot(cor(data2), tl.col = "black", tl.srt = 45)
+```
+
+Obviously, there are collinearity between dividend and real dividend, earnings and real earnings. Therefore, we turn to obtain the VIF values of these variables.
+
+VIF values:
+```{r,echo=FALSE}
+vif(fit_reg1)
+```
+
+So, after drop two variables Dividend and Earnings who have larger VIF, we go on to fit the reduced model as following (let $Z_{1t},Z_{2t},Z_{3t},Z_{4t},Z_{5t}$):
+
+```{r,echo=FALSE}
+#delete variables:dividend, earnings
+data3<-data2[,-c(2,3)]
+fit_reg2<-lm(S.P.Composite~.,data=data3)
+summary(fit_reg2)
+res<-fit_reg2$residuals
+```
+
+Therefore, (1) can be:
+$X_{t}= 184.89841 + 2.3679Z_{1t}− 32.395Z_{2t} + 0.8666Z_{3t} − 10.7910Z_{4t} +0.8508Z_{5t}+y_{t}^*$.
+
+
+Next, we need to fit the ARMA+GARCH model to the residuals ($y_{t}^*$) of this linear regression. Before fitting this final model, it is necessary to check the time series plot of $y_{t}^*$ as well as ACF and PACF plots of both $y_{t}^*$ and $y_{t}^{*2}$ . The plots are as following:
+
+```{r,echo=FALSE}
+#change residuals to time series
+sp<-ts(res,start=c(1881, 1), end=c(2016, 12), frequency=12)
+ts.plot(sp,main='residuals of regression for S&P Composite')
+
+par(mfrow=c(2,2)) 
+acf(sp,main= "acf of S&P's rediduals")
+pacf(sp,main= "pacf of S&P's rediduals")
+
+acf(sp**2,main= "acf of squared S&P's rediduals")
+pacf(sp**2,main= "pacf of squared S&P's rediduals")
+
+```
+
+From the plots, we find obvious trend in the time series plot of the $y_{t}^*$
+Also, the ACF and PACF plots are not good enough.
+
+In addition, we need to use the Augmented Dickey-Fuller Test and Phillips-Perron test to check the stationarity of the $y_{t}^*$ and $y_{t}^{*2}$ as following:
+
+```{r,echo=FALSE,warning=FALSE}
+#use adf test and pp test to check stationary: not reject - nonstationary
+adf.test(sp)
+pp.test(sp)
+adf.test(sp**2)
+pp.test(sp**2)
+
+```
+ 
+From all p-values we obtained above, we can conclude that the residuals  $y_{t}^*$ and its square are non-stationary. So, in order to remove the trend, we try to do difference of the  $y_{t}^*$ and mark it as ‘sp_d’.
+
+Following are the ACF and PACF plots of both ‘sp_d’ and the squre of the ‘sp_d’:
+
+```{r,echo=FALSE}
+#do difference to get stationary series
+sp_d<-diff(sp)
+par(mfrow=c(2,2)) 
+acf(sp_d,main= "acf of sp_d")
+pacf(sp_d,main= "pacf of sp_d")
+
+#acf/pacf both show patterns:ARCH+GARCH
+acf(sp_d**2,main= "acf of squared sp_d")
+pacf(sp_d**2,main= "pacf of squared sp_d")
+```
+
+
+From these plots, we find that the ACF and PACF of ‘sp_d’ have some patterns and decay into blue dotted lines with the lag values increasing. In addition, the ACF and PACF plots of the square of ‘sp_d’ have obvious patterns. Therefore, these all results show that we need to fit ARMA+GARCH model to the dataset.
+
+
+It is also necessary to check the stationarity again. From the ADF test and PP test following, we can reject the null hypothesis (non-stationary) and conclude that the series are stationary.
+
+```{r,echo=FALSE,warning=FALSE}
+#use adf test and pp test to check stationary: reject - stationary
+adf.test(sp_d)
+pp.test(sp_d)
+```
+
+
+###(2) ARMA Model.
+
+Before fitting the ARMA+GARCH model by garchfit {fGarch}, we are supposed to decide a best order for the ARMA model. So, we set loops to choose a model with the smallest BIC automatically. At last, we decide to use MA(1), whose BIC is 4.148424, to fit ‘sp_d’ as the ARMA part of the final model we will fit next.
+
+```{r,include=FALSE}
+#ARMA(p,q) selection :ARMA(0,1)
+d=0   # no differencing needed
+np=3    #maximum AR order
+nq=3    # maximum MA order
+# Set up loops to run several possible models
+for (p in 0:np){
+  for (q in 0:nq) {
+    arma.fit = sarima(sp_d,p,d,q)
+    outarima <- c(p,q,arma.fit$BIC)
+    write(outarima,file="./outarima",append=TRUE)
+  }
+}
+
+outarima.all <- read.table("./outarima")
+colnames(outarima.all) = c("p","q", "BIC")
+```
+
+```{r,echo=FALSE}
+# Find the p,d,q which give the lowest BIC : ARMA(0,1), same as acf/pacf plots
+outarima.all[which.min(outarima.all[,3]),]
+
+```
+
+
+Moreover, we also want to decide the order for the GARCH part. Due to the patterns showed in the ACF and PACF plots for the residuals ($\sigma_t \varepsilon_t $) of the ARMA model, we decide to use GARCH(1, 1) in the GARCH part.
+
+```{r,echo=FALSE}
+# fit ARIMA(0,0,1) for sp_d by CSS using arima
+fit_arima<- arima(sp_d, order = c(0, 0, 1), method = "CSS")
+fit_arima
+
+res_arma<-fit_arima$residuals
+
+
+par(mfrow=c(2,2)) 
+acf(res_arma,main= "acf of ARMA(0,1) residuals")
+pacf(res_arma,main= "pacf of ARMA(0,1) residuals")
+acf(res_arma**2,main= "acf of squared ARMA(0,1) residuals")
+pacf(res_arma**2,main= "pacf of squared ARMA(0,1) residuals")
+
+
+```
+
+
+###(3) ARMA+GARCH Model.
+
+Finally, we use the garchFit {fGarch} to fit the final model to the ‘sp_d’ as following:
+
+
+####Model 1: 
+We assume that the distribution of $\varepsilon_t$ is standard normal.
+
+From the result, we can see that the Jarque-Bera test and Shapiro-Wilk test can show that the normal assumption is not suitable. The skewness and excess kurtosis exist in the model distribution assumption because the p-value is small enough.
+
+And we also use the LM Arch test to do the diagnostic of the model. The LM Arch test (p-value=0.9763>0.05) shows that the  $\varepsilon_t$ is uncorrelated, which conforms to the assumption of the GARCH-type model.
+
+So this model is not a good fit for the data.
+
+```{r,echo=FALSE}
+#fit arma+garch model, use nomal errors (not suitable)
+#both Jarque-Bera Testand Shapiro-Wilk Test reject normal
+fit_garch<-garchFit(~arma(0,1)+garch(1,1),data=sp_d,trace=FALSE)
+summary(fit_garch)
+
+```
+
+So we try to use to use non normal conditional distribution: standard t distribution and skewed t distribution.
+
+####Model 2: 
+Assume that the distribution of $\varepsilon_t$ is standard Student’s t with 5 d.f, mean=0 and SD=1. We can see the estimations of the model parameters are all significant for standard t distribution.
+
+The Ljung-Box statistics indicate quite significant autocorrelations in standardized residuals since p-values are below 0.05, and no autocorrelations in squared standardized residuals. However, since this model is not fitted to the raw data, we use the LM Arch test to do the diagnostic of the model. The LM Arch test (p-value=0.9823>0.05) shows that the residuals are uncorrelated, which conforms to the assumption of the GARCH-type model. So we still conclude that the model does not exhibit significant lack of fit.
+
+```{r,echo=FALSE}
+#fit arma+garch model, use standard t distribution errors (best)
+fit_garch2<-garchFit(~arma(0,1)+garch(1,1),data=sp_d,cond.dist = 'std',trace=FALSE)
+summary(fit_garch2)
+res_garch2=fit_garch2@residuals	
+
+par(mfrow=c(1,2)) 
+acf(res_garch2,main= "acf of model2 residuals")
+pacf(res_garch2,main= "pacf of model2 residuals")
+
+```
+
+
+####Model 3: 
+Assume that the distribution of $\varepsilon_t$ is skew-standard Student’s t with 5 d.f, mean=0 and SD=1. The Ljung-Box statistics indicate quite significant autocorrelations in standardized residuals since p-values are below 0.05, and no autocorrelations in squared standardized residuals. However, since this model is not fitted to the raw data, we
+use the LM Arch test to do the diagnostic of the model. The LM Arch test (p-value=0.9825>0.05) shows that the $\varepsilon_t$ is uncorrelated, which conforms to the assumption of the GARCH-type model.
+
+
+```{r,echo=FALSE}
+#fit arma+garch model, use skewed t distrbution errors
+fit_garch3<-garchFit(~arma(0,1)+garch(1,1),data=sp_d,cond.dist = 'sstd',trace=FALSE)
+summary(fit_garch3)
+res_garch3=fit_garch3@residuals	
+par(mfrow=c(1,2)) 
+acf(res_garch2,main= "acf of model3 residuals")
+pacf(res_garch2,main= "pacf of model3 residuals")
+```
+
+
+Finally, we compare these three models using the information criterion statistics including AIC and BIC and log-likelihood criterion. We find that the model 2 whose conditional distribution is standard t is the best because the smallest AIC, BIC and larger log-likelihood.
+
+Therefore, we obtain the final best model as following:
+
+$$
+\left\{
+\begin{aligned}
+X_t&=184.8984+2.3679z_{1t}-32.395z_{2t}+0.8666z_{3t}-10.791z_{4t}+0.8505z_{5t}+y_t^* \\
+y_t^*&=(1+0.3406B)(y_t-0.20859) \\
+y_{t}&=\sigma_t\varepsilon_t  \\
+\sigma_t^2&=0.0430 + 0.1552y_{t-1}^2+0.8653 \sigma_{t-1}^2 \\
+\end{aligned}
+\right.
+$$
+
+##4. Forecasting.
+
+
+Finally, we use our final GARCH-M model to forecast the S&P Composite Index from January 2017 to June 2017 as following:
+
+2274.243, 2310.593, 2333.384, 2329.704, 2352.646, 2380.969.
+
+Also, we compare the real observed S&P Composite Index data with our forecasting values. Their overlay time-series plot is as following:
+
+```{r,include=FALSE}
+#Prediction into the future
+predict(fit_garch2,n.ahead=6,trace=F)
+data_forecast<-raw[c(6:11),]
+data_fore<- data_forecast[seq(dim(data_forecast)[1],1),]
+
+fit_reg2$residuals[1632]
+
+pred<-predict.lm(fit_reg2,data_fore)+c(385.2589,385.0503 ,384.8417,384.6331,384.4245,384.2159 )
+observe<-c(2275.12,2329.91,2366.82,2359.31,2359.35,2433.99 )
+dta1<-data.frame(pred,observe)           
+
+```
+
+```{r,echo=FALSE}
+ts.plot(dta1,gpars= list(col=rainbow(10)),main='time series plot for forecasting')
+legend('topleft', col=rainbow(10), lty=1, lwd=2, bty=c('n'),legend=c("predict", "observe"),cex=0.9) 
+```
+
+
+##5. Discussion of Results and Summary.
+In this case, we firstly did the variable selection in order to obtain a good-fit regression model. Then, using the difference of the residuals of this regression model, we fit the MA(1)+ GARCH(1,1) model as following:
+
+$$
+\left\{
+\begin{aligned}
+X_t&=184.8984+2.3679z_{1t}-32.395z_{2t}+0.8666z_{3t}-10.791z_{4t}+0.8505z_{5t}+y_t^* \\
+y_t^*&=(1+0.3406B)(y_t-0.20859) \\
+y_{t}&=\sigma_t\varepsilon_t  \\
+\sigma_t^2&=0.0430 + 0.1552y_{t-1}^2+0.8653 \sigma_{t-1}^2 \\
+\end{aligned}
+\right.
+$$
+
+
+With the final fitted model, we predicted the S&P Composite values from 01/2017 to 06/2017. From the plot in Part 4, we can see that the prediction is approximately same with the observed data. So, the model performs well.
+
+In the next step, we can try more complex model such as APARCH, TGARCH and EGARCH, etc.
+
+
+##Reference
+[1] https://www.investopedia.com/ask/answers/040215/what-does-sp-500-index-measure-and-how-it-calculated.asp
+
+[2] https://stats.stackexchange.com/questions/202526/garch-diagnostics-autocorrelation-in-standardized-residuals-but-not-in-their-sq
+
+[3] Modeling S&P 500 STOCK INDEX using ARMA-ASYMMETRIC POWER ARCH models, Jia Zhou, Chanli He[June 2009]
